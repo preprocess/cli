@@ -1,0 +1,27 @@
+{
+  "name": "@preprocess/cli",
+  "version": "0.0.0",
+  "description": "CLI for authoring and operating Preprocess Processes",
+  "type": "module",
+  "license": "UNLICENSED",
+  "bin": {
+    "preprocess": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit",
+    "test": "pnpm build && node --test"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.14.0"
+}
+
