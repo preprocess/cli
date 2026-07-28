@@ -33,6 +33,7 @@ import {
 
 export const CLI_SCHEMA_VERSION = "preprocess.cli/v1" as const;
 export const MCP_SCHEMA_VERSION = "preprocess.mcp/v1" as const;
+export const CLI_VERSION = "1.0.0" as const;
 
 export type ExitCode = 0 | 1 | 2 | 3 | 4 | 5;
 export type OutputFormat = "pretty" | "json" | "jsonl";
@@ -300,7 +301,13 @@ function envelope(
   ok: boolean,
   fields: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
-  return { schemaVersion: CLI_SCHEMA_VERSION, command, ok, ...fields };
+  return {
+    schemaVersion: CLI_SCHEMA_VERSION,
+    cliVersion: CLI_VERSION,
+    command,
+    ok,
+    ...fields,
+  };
 }
 
 function diagnosticValue(
@@ -415,8 +422,8 @@ async function dynamicContracts(): Promise<AuthoringContracts> {
     };
     if (
       versions.project !== "preprocess.project/v1" ||
-      versions.compiler !== "0.1.0" ||
-      versions.harness !== "0.1.0"
+      versions.compiler !== "1.0.0" ||
+      versions.harness !== "1.0.0"
     )
       throw new CliFailure(
         "The shared authoring contracts are incompatible.",
@@ -1427,6 +1434,10 @@ export async function main(
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+const entrypoint = process.argv[1];
+if (
+  entrypoint !== undefined &&
+  import.meta.url === pathToFileURL(realpathSync(entrypoint)).href
+) {
   process.exitCode = await main();
 }

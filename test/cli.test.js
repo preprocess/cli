@@ -13,6 +13,7 @@ import test from "node:test";
 
 import {
   CLI_SCHEMA_VERSION,
+  CLI_VERSION,
   MCP_SCHEMA_VERSION,
   execute,
   serveMcp,
@@ -27,8 +28,8 @@ function contracts(overrides = {}) {
   const value = {
     versions: {
       project: "preprocess.project/v1",
-      compiler: "0.1.0",
-      harness: "0.1.0",
+      compiler: "1.0.0",
+      harness: "1.0.0",
     },
     discoverProcessProject(root) {
       calls.discover += 1;
@@ -127,6 +128,7 @@ test("machine output is versioned and unknown commands use exit code 2", async (
       JSON.parse(streams.stdout.join("")).schemaVersion,
       CLI_SCHEMA_VERSION,
     );
+    assert.equal(JSON.parse(streams.stdout.join("")).cliVersion, CLI_VERSION);
     assert.equal(fake.calls.compile, 0);
     const duplicate = io(root);
     assert.equal(

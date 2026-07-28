@@ -88,8 +88,8 @@ function projectContracts(packageBytes = Buffer.from('{"package":"exact"}')) {
   return {
     versions: {
       project: "preprocess.project/v1",
-      compiler: "0.1.0",
-      harness: "0.1.0",
+      compiler: "1.0.0",
+      harness: "1.0.0",
     },
     discoverProcessProject() {
       throw new Error("not used");
@@ -130,7 +130,7 @@ function processVersion(version = "1.2.3") {
     manifestBytes: 20,
     source: { kind: "local", commitSha: null, dirty: false },
     sdkVersion: "1.0.0",
-    compilerVersion: "0.1.0",
+    compilerVersion: "1.0.0",
     formatVersion: "preprocess.package/v1",
     capabilities: { outbound: [] },
     testSummary: { passed: true, tests: 0, failures: [] },
