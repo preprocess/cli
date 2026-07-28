@@ -5,6 +5,7 @@ import type { RemoteCommandContext } from "../../remote/context.js";
 import type { HostedEnvironment } from "../../remote/types.js";
 import { RemoteFailure } from "../../remote/types.js";
 import { validateRollback } from "../../remote/resources.js";
+import { isTypeId } from "../../remote/validate.js";
 
 export interface RollbackInput {
   readonly processId: string;
@@ -17,7 +18,7 @@ export async function rollbackCommand(
   io: CliIo,
   context: RemoteCommandContext,
 ): Promise<CliResult> {
-  if (!/^proc_[0-9a-hjkmnp-tv-z]{26}$/.test(input.processId))
+  if (!isTypeId(input.processId, "proc"))
     throw new Error("rollback requires a valid --process-id.");
   let authentication;
   try {
@@ -64,7 +65,8 @@ export async function rollbackCommand(
     if (
       error instanceof RemoteFailure &&
       !error.details.authorizationUrl &&
-      (error.exitCode === 3 ||
+      (error.details.httpStatus === 401 ||
+        error.details.httpStatus === 403 ||
         /(?:CONSENT|AUTHORITY|CREDENTIAL|EGRESS|CAPABILITY|BINDING)/i.test(
           error.details.code,
         ))
@@ -77,6 +79,15 @@ export async function rollbackCommand(
     }
     throw error;
   }
+  if (
+    response.value.processId !== input.processId ||
+    response.value.environment !== input.environment
+  )
+    throw new RemoteFailure(
+      "Rollback identity did not match the request.",
+      4,
+      { code: "PP_API_RESPONSE_INVALID", requestId: response.requestId },
+    );
   return {
     exitCode: 0,
     value: {

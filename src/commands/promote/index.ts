@@ -5,6 +5,7 @@ import type { RemoteCommandContext } from "../../remote/context.js";
 import type { HostedEnvironment } from "../../remote/types.js";
 import { RemoteFailure } from "../../remote/types.js";
 import { validatePromotion } from "../../remote/resources.js";
+import { isTypeId } from "../../remote/validate.js";
 
 export interface PromoteInput {
   readonly processId: string;
@@ -56,6 +57,25 @@ export async function promoteCommand(
   } catch (error) {
     throw authorizationFailure(error, context, input);
   }
+  const deployment = response.value.deployment as
+    | Readonly<Record<string, unknown>>
+    | undefined;
+  const activation = response.value.activation as
+    | Readonly<Record<string, unknown>>
+    | undefined;
+  if (
+    deployment?.processId !== input.processId ||
+    deployment.processVersionId !== input.processVersionId ||
+    deployment.environment !== input.environment ||
+    activation?.processId !== input.processId ||
+    activation.activeVersionId !== input.processVersionId ||
+    activation.environment !== input.environment
+  )
+    throw new RemoteFailure(
+      "Promotion identity did not match the request.",
+      4,
+      { code: "PP_API_RESPONSE_INVALID", requestId: response.requestId },
+    );
   return {
     exitCode: 0,
     value: {
@@ -92,7 +112,8 @@ function authorizationFailure(
 ): unknown {
   if (!(error instanceof RemoteFailure)) return error;
   const needsAuthorization =
-    error.exitCode === 3 ||
+    error.details.httpStatus === 401 ||
+    error.details.httpStatus === 403 ||
     /(?:CONSENT|AUTHORITY|CREDENTIAL|EGRESS|CAPABILITY|BINDING)/i.test(
       error.details.code,
     );
@@ -105,8 +126,8 @@ function authorizationFailure(
 }
 
 function validateIds(processId: string, processVersionId: string): void {
-  if (!/^proc_[0-9a-hjkmnp-tv-z]{26}$/.test(processId))
+  if (!isTypeId(processId, "proc"))
     throw new Error("promote requires a valid --process-id.");
-  if (!/^procv_[0-9a-hjkmnp-tv-z]{26}$/.test(processVersionId))
+  if (!isTypeId(processVersionId, "procv"))
     throw new Error("promote requires a valid --process-version-id.");
 }

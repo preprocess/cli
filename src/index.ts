@@ -1073,7 +1073,7 @@ const mcpToolDefinitions = Object.freeze([
         root: rootSchema,
         processId: {
           type: "string",
-          pattern: "^proc_[0-9a-hjkmnp-tv-z]{26}$",
+          pattern: "^proc_[0-7][0123456789abcdefghjkmnpqrstvwxyz]{25}$",
         },
         version: {
           type: "string",

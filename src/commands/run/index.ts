@@ -5,6 +5,7 @@ import type { RemoteCommandContext } from "../../remote/context.js";
 import type { HostedEnvironment } from "../../remote/types.js";
 import { RemoteFailure } from "../../remote/types.js";
 import { validateHostedRun } from "../../remote/resources.js";
+import { isTypeId } from "../../remote/validate.js";
 
 export interface HostedRunInput {
   readonly processId: string;
@@ -77,6 +78,6 @@ export async function hostedRunCommand(
 }
 
 function validateTypeId(value: string, prefix: string, option: string): void {
-  if (!new RegExp(`^${prefix}_[0-9a-hjkmnp-tv-z]{26}$`).test(value))
+  if (!isTypeId(value, prefix))
     throw new Error(`Hosted run requires a valid ${option}.`);
 }

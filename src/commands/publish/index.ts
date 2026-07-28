@@ -4,6 +4,7 @@ import type { CliIo, CliResult, CompilationResult } from "../../index.js";
 import type { RemoteCommandContext } from "../../remote/context.js";
 import { RemoteFailure } from "../../remote/types.js";
 import { validateProcessVersion } from "../../remote/resources.js";
+import { isTypeId } from "../../remote/validate.js";
 
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 
@@ -92,6 +93,6 @@ export async function publishCommand(
 }
 
 function validateProcessId(value: string): void {
-  if (!/^proc_[0-9a-hjkmnp-tv-z]{26}$/.test(value))
+  if (!isTypeId(value, "proc"))
     throw new Error("publish requires a valid --process-id.");
 }

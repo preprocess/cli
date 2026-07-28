@@ -26,6 +26,7 @@ const processVersionId = "procv_01k5j9pdq7gh2mnb4cvxyz8t3e";
 const previousVersionId = "procv_01k5j9pdq7gh2mnb4cvxyz8t3f";
 const caseId = "case_01k5j9m2n8ef9tqr3vwxyz4a7b";
 const workspaceId = "ws_01k5j9pdq7gh2mnb4cvxyz8t3e";
+const requestId = `req_${"1".repeat(26)}`;
 const digest = `sha256:${"a".repeat(64)}`;
 const timestamp = "2026-07-28T12:00:00.000Z";
 
@@ -251,7 +252,7 @@ async function withServer(handler, callback) {
 function json(response, status, value, headers = {}) {
   response.writeHead(status, {
     "content-type": "application/json",
-    "preprocess-request-id": `req_${"1".repeat(26)}`,
+    "preprocess-request-id": requestId,
     ...headers,
   });
   response.end(JSON.stringify(value));
@@ -308,7 +309,12 @@ test("device login polls safely, refreshes automatically, identifies, and logs o
         });
       }
       return json(response, 404, {
-        error: { code: "PP_NOT_FOUND", message: "no", status: 404 },
+        error: {
+          code: "PP_NOT_FOUND",
+          message: "no",
+          status: 404,
+          requestId,
+        },
       });
     },
     async ({ url }) => {
@@ -368,6 +374,487 @@ test("device login polls safely, refreshes automatically, identifies, and logs o
       }
     },
   );
+});
+
+test("public error envelopes match checked OpenAPI exactly", async () => {
+  const store = new MemoryCredentialStore();
+  store.value = {
+    schemaVersion: "preprocess.auth/v1",
+    accessToken: "error-contract-token",
+    expiresAt: Number.MAX_SAFE_INTEGER,
+  };
+  const root = mkdtempSync(join(tmpdir(), "preprocess-error-contract-"));
+  try {
+    const cases = [
+      {
+        name: "optional issue path",
+        expected: 1,
+        body: {
+          error: {
+            code: "PP_VALIDATION_FAILED",
+            message: "Invalid.",
+            status: 422,
+            requestId,
+            issues: [{ code: "PP_MISSING_FIELD", message: "Missing." }],
+          },
+        },
+      },
+      {
+        name: "required body request id",
+        expected: 4,
+        body: {
+          error: {
+            code: "PP_VALIDATION_FAILED",
+            message: "Invalid.",
+            status: 422,
+          },
+        },
+      },
+      {
+        name: "stable error code grammar",
+        expected: 4,
+        body: {
+          error: {
+            code: "not_stable",
+            message: "Invalid.",
+            status: 422,
+            requestId,
+          },
+        },
+      },
+      {
+        name: "matching header and body request ids",
+        expected: 4,
+        body: {
+          error: {
+            code: "PP_VALIDATION_FAILED",
+            message: "Invalid.",
+            status: 422,
+            requestId: `req_${"2".repeat(26)}`,
+          },
+        },
+      },
+      {
+        name: "undeclared authorization URL",
+        expected: 4,
+        body: {
+          error: {
+            code: "PP_PRODUCTION_AUTHORITY_REQUIRED",
+            message: "Denied.",
+            status: 403,
+            requestId,
+            authorizationUrl: "https://attacker.invalid/authorize",
+          },
+        },
+      },
+      {
+        name: "slash-prefixed issue path",
+        expected: 4,
+        body: {
+          error: {
+            code: "PP_VALIDATION_FAILED",
+            message: "Invalid.",
+            status: 422,
+            requestId,
+            issues: [
+              {
+                code: "PP_MISSING_FIELD",
+                path: "customerId",
+                message: "Missing.",
+              },
+            ],
+          },
+        },
+      },
+    ];
+    for (const fixture of cases) {
+      const streams = io(root);
+      const result = await execute(
+        ["auth", "whoami"],
+        streams.value,
+        undefined,
+        {
+          credentialStore: store,
+          fetch: async () =>
+            new Response(JSON.stringify(fixture.body), {
+              status: fixture.body.error.status,
+              headers: { "preprocess-request-id": requestId },
+            }),
+        },
+      );
+      assert.equal(result.exitCode, fixture.expected, fixture.name);
+      assert.doesNotMatch(
+        streams.stdout.join(""),
+        /attacker\.invalid/,
+        fixture.name,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("request and response TypeIDs reject UUID overflow encodings", async () => {
+  const overflowProcessId = `proc_8${"0".repeat(25)}`;
+  const overflowVersionId = `procv_8${"0".repeat(25)}`;
+  const store = new MemoryCredentialStore();
+  store.value = {
+    schemaVersion: "preprocess.auth/v1",
+    accessToken: "typeid-contract-token",
+    expiresAt: Number.MAX_SAFE_INTEGER,
+  };
+  const root = mkdtempSync(join(tmpdir(), "preprocess-typeid-contract-"));
+  try {
+    let requestCalls = 0;
+    const badRequest = io(root);
+    assert.equal(
+      (
+        await execute(
+          [
+            "publish",
+            "--process-id",
+            overflowProcessId,
+            "--version",
+            "1.2.3",
+          ],
+          badRequest.value,
+          projectContracts(),
+          {
+            credentialStore: store,
+            fetch: async () => {
+              requestCalls += 1;
+              return new Response(
+                JSON.stringify({
+                  ...processVersion(),
+                  processId: overflowProcessId,
+                }),
+                {
+                  status: 201,
+                  headers: { "preprocess-request-id": requestId },
+                },
+              );
+            },
+          },
+        )
+      ).exitCode,
+      2,
+    );
+    assert.equal(requestCalls, 0);
+
+    const badResponse = io(root);
+    const result = await execute(
+      [
+        "publish",
+        "--process-id",
+        processId,
+        "--version",
+        "1.2.3",
+      ],
+      badResponse.value,
+      projectContracts(),
+      {
+        credentialStore: store,
+        fetch: async () =>
+          new Response(
+            JSON.stringify({
+              ...processVersion(),
+              id: overflowVersionId,
+            }),
+            {
+              status: 201,
+              headers: { "preprocess-request-id": requestId },
+            },
+          ),
+      },
+    );
+    assert.equal(result.exitCode, 4);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("hosted success responses are bound to the exact requested resources", async () => {
+  const store = new MemoryCredentialStore();
+  store.value = {
+    schemaVersion: "preprocess.auth/v1",
+    accessToken: "binding-contract-token",
+    sessionCookie: "binding-session-cookie",
+    csrfToken: "binding-csrf-token",
+    expiresAt: Number.MAX_SAFE_INTEGER,
+  };
+  const root = mkdtempSync(join(tmpdir(), "preprocess-binding-contract-"));
+  const altCaseId = "case_01k5j9m2n8ef9tqr3vwxyz4a7c";
+  try {
+    const scenarios = [
+      {
+        name: "promotion version",
+        args: [
+          "promote",
+          "--process-id",
+          processId,
+          "--process-version-id",
+          processVersionId,
+          "--environment",
+          "development",
+        ],
+        value: {
+          deployment: {
+            processId,
+            processVersionId: previousVersionId,
+            environment: "development",
+            contentDigest: digest,
+            scriptName: "process-version",
+            capabilityDigest: digest,
+            bindingDigest: digest,
+            state: "deployed",
+            deploymentRef: "deployment-1",
+            errorCode: null,
+            deployedAt: timestamp,
+          },
+          activation: activation(),
+        },
+      },
+      {
+        name: "rollback environment",
+        args: [
+          "rollback",
+          "--process-id",
+          processId,
+          "--environment",
+          "development",
+        ],
+        value: { ...activation(), environment: "production" },
+      },
+      {
+        name: "execution list case",
+        args: [
+          "runs",
+          "list",
+          "--environment",
+          "development",
+          "--case-id",
+          caseId,
+          "--revision",
+          "1",
+        ],
+        value: {
+          data: [{ identity: { ...identity(), caseId: altCaseId } }],
+          nextCursor: null,
+          hasMore: false,
+        },
+      },
+      {
+        name: "execution detail id",
+        args: [
+          "runs",
+          "inspect",
+          "--environment",
+          "development",
+          "--case-id",
+          caseId,
+          "--revision",
+          "1",
+          "--execution-id",
+          "execution-1",
+        ],
+        value: {
+          ...executionDetail(),
+          identity: { ...identity(), id: "execution-2" },
+        },
+      },
+      {
+        name: "execution logs classification",
+        args: [
+          "runs",
+          "logs",
+          "--environment",
+          "development",
+          "--case-id",
+          caseId,
+          "--revision",
+          "1",
+          "--execution-id",
+          "execution-1",
+          "--classification",
+          "sensitive",
+        ],
+        value: executionLogs(),
+      },
+    ];
+    for (const scenario of scenarios) {
+      const streams = io(root);
+      const result = await execute(
+        scenario.args,
+        streams.value,
+        undefined,
+        {
+          credentialStore: store,
+          fetch: async () =>
+            new Response(JSON.stringify(scenario.value), {
+              status: 200,
+              headers: { "preprocess-request-id": requestId },
+            }),
+        },
+      );
+      assert.equal(result.exitCode, 4, scenario.name);
+      assert.equal(
+        JSON.parse(streams.stdout.join("")).code,
+        "PP_API_RESPONSE_INVALID",
+        scenario.name,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("timestamps must be canonical round-trippable platform timestamps", async () => {
+  const store = new MemoryCredentialStore();
+  store.value = {
+    schemaVersion: "preprocess.auth/v1",
+    accessToken: "timestamp-contract-token",
+    expiresAt: Number.MAX_SAFE_INTEGER,
+  };
+  const root = mkdtempSync(join(tmpdir(), "preprocess-timestamp-contract-"));
+  try {
+    const streams = io(root);
+    const result = await execute(
+      [
+        "run",
+        "--environment",
+        "development",
+        "--process-id",
+        processId,
+        "--process-version-id",
+        processVersionId,
+      ],
+      streams.value,
+      undefined,
+      {
+        credentialStore: store,
+        fetch: async () =>
+          new Response(
+            JSON.stringify({
+              id: "run-1",
+              processId,
+              processVersionId,
+              environment: "development",
+              status: "queued",
+              createdAt: "2026-07-28 12:00:00Z",
+            }),
+            {
+              status: 201,
+              headers: { "preprocess-request-id": requestId },
+            },
+          ),
+      },
+    );
+    assert.equal(result.exitCode, 4);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("API and auth response limits cancel streams before full consumption without retry", async () => {
+  const store = new MemoryCredentialStore();
+  store.value = {
+    schemaVersion: "preprocess.auth/v1",
+    accessToken: "stream-limit-token",
+    expiresAt: Number.MAX_SAFE_INTEGER,
+  };
+  const root = mkdtempSync(join(tmpdir(), "preprocess-stream-limit-"));
+  try {
+    const streaming = (chunkBytes, totalChunks, headers = {}) => {
+      const state = { pulls: 0, cancelled: false };
+      const body = new ReadableStream({
+        pull(controller) {
+          state.pulls += 1;
+          if (state.pulls <= totalChunks)
+            controller.enqueue(new Uint8Array(chunkBytes));
+          else controller.close();
+        },
+        cancel() {
+          state.cancelled = true;
+        },
+      });
+      return {
+        state,
+        response: new Response(body, { status: 200, headers }),
+      };
+    };
+
+    let apiFetches = 0;
+    const apiBody = streaming(512 * 1024, 8, {
+      "preprocess-request-id": requestId,
+    });
+    const apiStreams = io(root);
+    const apiResult = await execute(
+      ["auth", "whoami"],
+      apiStreams.value,
+      undefined,
+      {
+        credentialStore: store,
+        fetch: async () => {
+          apiFetches += 1;
+          return apiBody.response;
+        },
+      },
+    );
+    assert.equal(apiResult.exitCode, 4);
+    assert.equal(apiFetches, 1);
+    assert.ok(apiBody.state.pulls < 8);
+    assert.equal(apiBody.state.cancelled, true);
+
+    let preflightFetches = 0;
+    const preflightBody = streaming(1024, 8, {
+      "content-length": String(2 * 1024 * 1024 + 1),
+      "preprocess-request-id": requestId,
+    });
+    const preflightStreams = io(root);
+    assert.equal(
+      (
+        await execute(
+          ["auth", "whoami"],
+          preflightStreams.value,
+          undefined,
+          {
+            credentialStore: store,
+            fetch: async () => {
+              preflightFetches += 1;
+              return preflightBody.response;
+            },
+          },
+        )
+      ).exitCode,
+      4,
+    );
+    assert.equal(preflightFetches, 1);
+    assert.ok(preflightBody.state.pulls < 8);
+    assert.equal(preflightBody.state.cancelled, true);
+
+    let authFetches = 0;
+    const authBody = streaming(64 * 1024, 8);
+    const authStreams = io(root);
+    const authResult = await execute(
+      ["auth", "login"],
+      authStreams.value,
+      undefined,
+      {
+        authBaseUrl: "https://auth.preprocess.com",
+        credentialStore: new MemoryCredentialStore(),
+        fetch: async () => {
+          authFetches += 1;
+          return authBody.response;
+        },
+      },
+    );
+    assert.equal(authResult.exitCode, 3);
+    assert.equal(authFetches, 1);
+    assert.ok(authBody.state.pulls < 8);
+    assert.equal(authBody.state.cancelled, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("fallback credential storage is mode-restricted and rejects permissive files", async () => {
@@ -762,6 +1249,7 @@ test("remote retries, cancellation, compatibility, ambiguity, and non-disclosing
               code: "PP_UNAVAILABLE",
               message: "temporary",
               status: 503,
+              requestId,
             },
           },
           { "retry-after": "0" },
@@ -836,6 +1324,7 @@ test("remote retries, cancellation, compatibility, ambiguity, and non-disclosing
                 code: "PP_NOT_FOUND",
                 message: "secret process exists",
                 status: 404,
+                requestId,
               },
             }),
             {
@@ -951,6 +1440,7 @@ test("remote retries, cancellation, compatibility, ambiguity, and non-disclosing
                 code: "PP_PRODUCTION_AUTHORITY_REQUIRED",
                 message: "Additional authority is required.",
                 status: 403,
+                requestId,
               },
             }),
             {

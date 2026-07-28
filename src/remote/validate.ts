@@ -1,5 +1,5 @@
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
-const typeIdPattern = /^[a-z][a-z0-9]*_[0-9a-hjkmnp-tv-z]{26}$/;
+const typeIdSuffixPattern = /^[0-7][0123456789abcdefghjkmnpqrstvwxyz]{25}$/;
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
 
 export function record(value: unknown, label: string): Record<string, unknown> {
@@ -64,9 +64,17 @@ export function integerValue(
 
 export function typeId(value: unknown, prefix: string): string {
   const result = stringValue(value, `${prefix} identifier`, 64);
-  if (!typeIdPattern.test(result) || !result.startsWith(`${prefix}_`))
+  if (!isTypeId(result, prefix))
     throw new Error(`The API returned an invalid ${prefix} identifier.`);
   return result;
+}
+
+export function isTypeId(value: string, prefix: string): boolean {
+  return (
+    /^[a-z][a-z0-9]{0,62}$/.test(prefix) &&
+    value.startsWith(`${prefix}_`) &&
+    typeIdSuffixPattern.test(value.slice(prefix.length + 1))
+  );
 }
 
 export function identifier(value: unknown, label: string): string {
@@ -85,7 +93,13 @@ export function digest(value: unknown, label: string): string {
 
 export function timestamp(value: unknown, label: string): string {
   const result = stringValue(value, label, 64);
-  if (!Number.isFinite(Date.parse(result)))
+  if (
+    !/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/.test(
+      result,
+    ) ||
+    !Number.isFinite(Date.parse(result)) ||
+    new Date(result).toISOString() !== result
+  )
     throw new Error(`The API returned an invalid ${label}.`);
   return result;
 }

@@ -41,6 +41,7 @@ export interface RemoteErrorDetails {
   readonly authorizationUrl?: string;
   readonly ambiguous?: boolean;
   readonly retryAfterSeconds?: number;
+  readonly httpStatus?: number;
 }
 
 export class RemoteFailure extends Error {

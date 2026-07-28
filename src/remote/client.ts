@@ -7,12 +7,12 @@ import {
 } from "./types.js";
 import {
   exactKeys,
-  httpsUrl,
   integerValue,
-  optionalString,
   record,
   stringValue,
+  typeId,
 } from "./validate.js";
+import { readBoundedJsonResponse } from "./body.js";
 
 const API_VERSION = "1";
 const maximumResponseBytes = 2 * 1024 * 1024;
@@ -22,8 +22,7 @@ interface ApiError {
   readonly code: string;
   readonly message: string;
   readonly status: number;
-  readonly requestId?: string | undefined;
-  readonly authorizationUrl?: string | undefined;
+  readonly requestId: string;
 }
 
 class SystemClock implements RemoteClock {
@@ -102,33 +101,47 @@ function validateError(value: unknown, status: number): ApiError {
   const error = record(envelope.error, "error");
   exactKeys(
     error,
-    ["code", "message", "status"],
-    ["requestId", "issues", "authorizationUrl"],
+    ["code", "message", "status", "requestId"],
+    ["issues"],
     "error",
   );
-  if (integerValue(error.status, "error status", 100) !== status)
+  const errorStatus = integerValue(error.status, "error status", 400);
+  if (errorStatus > 599 || errorStatus !== status)
     throw new Error("The API returned an invalid error status.");
   if (error.issues !== undefined) {
-    if (!Array.isArray(error.issues) || error.issues.length > 100)
+    if (!Array.isArray(error.issues))
       throw new Error("The API returned invalid error issues.");
     for (const item of error.issues) {
       const issue = record(item, "error issue");
-      exactKeys(issue, ["code", "path", "message"], [], "error issue");
-      stringValue(issue.code, "issue code", 128);
-      stringValue(issue.path, "issue path", 2048);
-      stringValue(issue.message, "issue message", 2048);
+      exactKeys(issue, ["code", "message"], ["path"], "error issue");
+      apiErrorCode(issue.code, "issue code");
+      if (
+        issue.path !== undefined &&
+        (typeof issue.path !== "string" || !issue.path.startsWith("/"))
+      )
+        throw new Error("The API returned an invalid issue path.");
+      nonEmptyString(issue.message, "issue message");
     }
   }
   return {
-    code: stringValue(error.code, "error code", 128),
-    message: stringValue(error.message, "error message", 2048),
+    code: apiErrorCode(error.code, "error code"),
+    message: nonEmptyString(error.message, "error message"),
     status,
-    requestId: optionalString(error.requestId, "request identifier", 128),
-    authorizationUrl:
-      error.authorizationUrl === undefined
-        ? undefined
-        : httpsUrl(error.authorizationUrl, "authorization URL"),
+    requestId: typeId(error.requestId, "req"),
   };
+}
+
+function apiErrorCode(value: unknown, label: string): string {
+  const result = nonEmptyString(value, label);
+  if (!/^PP_[A-Z][A-Z0-9_]*$/.test(result))
+    throw new Error(`The API returned an invalid ${label}.`);
+  return result;
+}
+
+function nonEmptyString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length < 1)
+    throw new Error(`The API returned an invalid ${label}.`);
+  return value;
 }
 
 function exitCodeForStatus(status: number): 1 | 3 | 4 {
@@ -233,27 +246,41 @@ export class RemoteClient {
           5,
           { code: "PP_API_VERSION_INCOMPATIBLE" },
         );
-      const requestId = response.headers.get("preprocess-request-id");
-      if (!requestId || requestId.length > 128 || !identifierHeader(requestId))
+      const rawRequestId = response.headers.get("preprocess-request-id");
+      let requestId: string;
+      try {
+        requestId = typeId(rawRequestId, "req");
+      } catch {
         throw new RemoteFailure(
           "The platform response omitted a valid request identifier.",
           4,
           { code: "PP_API_RESPONSE_INVALID" },
         );
-      const responseText = await response.text();
-      if (Buffer.byteLength(responseText) > maximumResponseBytes)
-        throw new RemoteFailure("The platform response was too large.", 4, {
-          code: "PP_API_RESPONSE_INVALID",
-          requestId,
-        });
+      }
       let responseValue: unknown;
       try {
-        responseValue = JSON.parse(responseText) as unknown;
-      } catch {
-        throw new RemoteFailure("The platform returned invalid JSON.", 4, {
-          code: "PP_API_RESPONSE_INVALID",
-          requestId,
-        });
+        responseValue = await readBoundedJsonResponse(
+          response,
+          maximumResponseBytes,
+          "The platform response",
+          request.signal,
+        );
+      } catch (error) {
+        if (
+          request.signal?.aborted ||
+          (error as { name?: unknown }).name === "AbortError"
+        )
+          throw abortError();
+        throw new RemoteFailure(
+          error instanceof Error
+            ? error.message
+            : "The platform returned an invalid response.",
+          4,
+          {
+            code: "PP_API_RESPONSE_INVALID",
+            requestId,
+          },
+        );
       }
       if (!response.ok) {
         let apiError: ApiError;
@@ -266,7 +293,7 @@ export class RemoteClient {
             { code: "PP_API_RESPONSE_INVALID", requestId },
           );
         }
-        if (apiError.requestId && apiError.requestId !== requestId)
+        if (apiError.requestId !== requestId)
           throw new RemoteFailure(
             "The platform returned mismatched request identifiers.",
             4,
@@ -290,9 +317,7 @@ export class RemoteClient {
           {
             code: apiError.code,
             requestId,
-            ...(apiError.authorizationUrl
-              ? { authorizationUrl: apiError.authorizationUrl }
-              : {}),
+            httpStatus: response.status,
             ...(retryAfterSeconds === undefined
               ? {}
               : { retryAfterSeconds }),
@@ -328,8 +353,4 @@ export class RemoteClient {
       ...(lastNetworkFailure ? { ambiguous: true } : {}),
     });
   }
-}
-
-function identifierHeader(value: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value);
 }

@@ -7,6 +7,7 @@ import {
   validateExecutionLogs,
   validateExecutionPage,
 } from "../../remote/resources.js";
+import { isTypeId } from "../../remote/validate.js";
 
 export interface RunsInput {
   readonly environment: HostedEnvironment;
@@ -24,7 +25,7 @@ export async function runsCommand(
   io: CliIo,
   context: RemoteCommandContext,
 ): Promise<CliResult> {
-  if (!/^case_[0-9a-hjkmnp-tv-z]{26}$/.test(input.caseId))
+  if (!isTypeId(input.caseId, "case"))
     throw new Error(`runs ${operation} requires a valid --case-id.`);
   if (!Number.isSafeInteger(input.revision) || input.revision < 1)
     throw new Error(`runs ${operation} requires a positive --revision.`);
@@ -74,6 +75,12 @@ export async function runsCommand(
           ? validateExecutionDetail
           : validateExecutionLogs,
   });
+  if (!matchesRequest(operation, response.value, input))
+    throw new RemoteFailure(
+      "Execution identity did not match the request.",
+      4,
+      { code: "PP_API_RESPONSE_INVALID", requestId: response.requestId },
+    );
   return {
     exitCode: 0,
     value: {
@@ -86,4 +93,45 @@ export async function runsCommand(
       requestId: response.requestId,
     },
   };
+}
+
+function matchesRequest(
+  operation: "list" | "inspect" | "logs",
+  value: Readonly<Record<string, unknown>>,
+  input: RunsInput,
+): boolean {
+  if (operation === "list") {
+    const data = value.data;
+    return (
+      Array.isArray(data) &&
+      data.every((item) => {
+        const identity = (
+          item as { readonly identity?: Readonly<Record<string, unknown>> }
+        ).identity;
+        if (!identity) return false;
+        return (
+          identity.caseId === input.caseId &&
+          identity.caseRevision === input.revision
+        );
+      })
+    );
+  }
+  if (operation === "inspect") {
+    const identity = value.identity as
+      | Readonly<Record<string, unknown>>
+      | undefined;
+    if (!identity) return false;
+    return (
+      identity.id === input.executionId &&
+      identity.caseId === input.caseId &&
+      identity.caseRevision === input.revision
+    );
+  }
+  return (
+    value.executionId === input.executionId &&
+    value.caseId === input.caseId &&
+    value.revision === input.revision &&
+    (input.classification === undefined ||
+      value.classification === input.classification)
+  );
 }

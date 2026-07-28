@@ -12,6 +12,7 @@ import {
   record,
   stringValue,
 } from "../remote/validate.js";
+import { readBoundedJsonResponse } from "../remote/body.js";
 
 export interface DeviceAuthorization {
   readonly userCode: string;
@@ -76,15 +77,12 @@ async function authJson(
     body,
     ...(signal === undefined ? {} : { signal }),
   });
-  const text = await response.text();
-  if (Buffer.byteLength(text) > 256 * 1024)
-    throw new Error("Authentication response was too large.");
-  let value: unknown;
-  try {
-    value = JSON.parse(text) as unknown;
-  } catch {
-    throw new Error("Authentication service returned invalid JSON.");
-  }
+  const value = await readBoundedJsonResponse(
+    response,
+    256 * 1024,
+    "Authentication response",
+    signal,
+  );
   return { status: response.status, value };
 }
 
