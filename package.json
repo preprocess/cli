@@ -1,19 +1,40 @@
 {
   "name": "@preprocess/cli",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "CLI for authoring and operating Preprocess Processes",
   "type": "module",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/preprocess/cli.git"
+  },
+  "homepage": "https://github.com/preprocess/cli#readme",
+  "bugs": {
+    "url": "https://github.com/preprocess/cli/issues"
+  },
   "bin": {
     "preprocess": "./dist/index.js"
   },
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node test/clean-dist.js && tsc -p tsconfig.build.json",
     "check": "tsc --noEmit",
-    "test": "pnpm build && node --test"
+    "test": "pnpm build && node --test 'test/*.test.js' 'test/remote/*.test.js'",
+    "verify:package": "pnpm build && node test/release-package.js"
+  },
+  "dependencies": {
+    "@preprocess/compiler": "^1.0.0",
+    "@preprocess/diagnostics": "^1.0.0",
+    "@preprocess/harness": "^1.0.0",
+    "@preprocess/project": "^1.0.0",
+    "@preprocess/sdk": "^1.0.0"
   },
   "devDependencies": {
     "@types/node": "26.1.1",
@@ -24,4 +45,3 @@
   },
   "packageManager": "pnpm@10.14.0"
 }
-

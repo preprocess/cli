@@ -2,6 +2,13 @@
 
 Process authoring and authenticated hosted-operation CLI and MCP server.
 
+Install the public v1 release with:
+
+```sh
+npm install --global @preprocess/cli@^1.0.0
+preprocess doctor --format json
+```
+
 The local commands are a frontend to the versioned `@preprocess/project`,
 `@preprocess/compiler`, and `@preprocess/harness` contracts. They do not import
 private platform source or reproduce compiler/harness behavior. Those packages
@@ -119,3 +126,14 @@ pnpm check
 pnpm test
 pnpm build
 ```
+
+## Releases
+
+Version tags matching `v<package version>` publish one exact, verified tarball
+to npmjs through trusted publishing. The release job installs the frozen
+dependency graph, checks and tests the CLI, inspects the package inventory,
+installs the tarball in an isolated clean room, runs the real `preprocess`
+binary with the public v1 authoring packages, and retains release evidence with
+the source commit, package digest, npm integrity and shasum, file inventory,
+dependency set, registry identity, toolchain versions, and verification
+commands. No npm token is stored. The package remains `UNLICENSED`.
