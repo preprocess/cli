@@ -1,6 +1,6 @@
 # `@preprocess/cli`
 
-Credential-free, noninteractive Process authoring CLI and MCP server.
+Process authoring and authenticated hosted-operation CLI and MCP server.
 
 The local commands are a frontend to the versioned `@preprocess/project`,
 `@preprocess/compiler`, and `@preprocess/harness` contracts. They do not import
@@ -26,9 +26,58 @@ preprocess diff --left ./v1 --right ./v2
 preprocess scaffold view --root ./fabrication-orders
 ```
 
-All operations are flag-driven and noninteractive. Hosted environments,
-authentication, publication, promotion, and rollback are deliberately outside
-this package tranche. `run` accepts only `--environment local`.
+All operations are flag-driven. Local commands stay credential-free and `run`
+continues to default to `local`.
+
+## Authentication and hosted operations
+
+```sh
+preprocess auth login
+preprocess auth whoami --format json
+preprocess auth logout
+
+preprocess publish --root ./fabrication-orders \
+  --process-id proc_01k5j9pdq7gh2mnb4cvxyz8t3e --version 1.2.3
+preprocess run --environment development \
+  --process-id proc_01k5j9pdq7gh2mnb4cvxyz8t3e \
+  --process-version-id procv_01k5j9pdq7gh2mnb4cvxyz8t3e
+preprocess runs list --environment development \
+  --case-id case_01k5j9m2n8ef9tqr3vwxyz4a7b --revision 1
+preprocess runs inspect --environment development \
+  --case-id case_01k5j9m2n8ef9tqr3vwxyz4a7b --revision 1 \
+  --execution-id execution-1
+preprocess runs logs --environment development \
+  --case-id case_01k5j9m2n8ef9tqr3vwxyz4a7b --revision 1 \
+  --execution-id execution-1
+
+preprocess promote --environment production \
+  --process-id proc_01k5j9pdq7gh2mnb4cvxyz8t3e \
+  --process-version-id procv_01k5j9pdq7gh2mnb4cvxyz8t3e
+preprocess rollback --environment production \
+  --process-id proc_01k5j9pdq7gh2mnb4cvxyz8t3e
+```
+
+Login uses an OAuth device-code flow. Authentication is stored in the macOS
+keychain when available; the fallback file is restricted to mode `0600` inside
+a mode-`0700` directory. Access tokens, refresh tokens, device codes, session
+cookies, and CSRF tokens are never returned in CLI output. Expiring access
+tokens refresh automatically.
+
+`PREPROCESS_API_KEY` may provide bearer authentication for machine-safe
+publication, hosted test runs, and authorized execution reads. It cannot drive
+promotion or rollback. Those commands require the user session established by
+device login and return an HTTPS authorization URL without mutating traffic when
+the session or additional authority is missing.
+
+Every hosted command requires `--environment development` or
+`--environment production`; there is no hosted `local` or `preview`
+environment. Publication uploads the exact canonical compiler bytes under a
+content-derived idempotency key. It does not promote, bind credentials, or
+widen capabilities.
+
+For non-production development and deterministic fake servers,
+`PREPROCESS_API_URL` and `PREPROCESS_AUTH_URL` select the two service origins.
+Non-loopback origins must use HTTPS.
 
 `--format pretty`, `json`, and `jsonl` keep result data on stdout. Diagnostics
 and progress are reserved for stderr. Exit codes are stable:
@@ -56,9 +105,10 @@ exposes:
 - `versions_diff`, `schema_inspect`, `capabilities_inspect`, `package_build`
 - `package_publish`, `execution_logs_query`, `execution_artifact_read`
 
-Local tools call the same CLI contract paths. `package_publish` returns an
-explicit PRE-67 hosted-boundary response; it never performs a hidden mutation.
-Execution artifact/log tools read only bounded canonical local run artifacts.
+Local tools call the same CLI contract paths. `package_publish` requires
+`processId` and `version`, compiles the exact package, and calls the same
+idempotent publication boundary as the CLI. Execution artifact/log tools read
+only bounded canonical local run artifacts.
 
 ## Development
 

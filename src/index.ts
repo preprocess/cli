@@ -14,6 +14,23 @@ import {
 import { dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import {
+  loginCommand,
+  logoutCommand,
+  whoamiCommand,
+} from "./commands/auth/index.js";
+import { promoteCommand } from "./commands/promote/index.js";
+import { publishCommand } from "./commands/publish/index.js";
+import { rollbackCommand } from "./commands/rollback/index.js";
+import { hostedRunCommand } from "./commands/run/index.js";
+import { runsCommand } from "./commands/runs/index.js";
+import { createRemoteCommandContext } from "./remote/context.js";
+import {
+  RemoteFailure,
+  type HostedEnvironment,
+  type RemoteDependencies,
+} from "./remote/types.js";
+
 export const CLI_SCHEMA_VERSION = "preprocess.cli/v1" as const;
 export const MCP_SCHEMA_VERSION = "preprocess.mcp/v1" as const;
 
@@ -58,7 +75,11 @@ export interface CompilationResult {
     readonly capabilities?: Readonly<Record<string, unknown>>;
     readonly digests?: Readonly<Record<string, string>>;
   };
-  readonly package?: Readonly<Record<string, unknown>>;
+  readonly package?: Readonly<Record<string, unknown>> & {
+    readonly formatVersion?: string;
+    readonly contentDigest?: string;
+    readonly manifestDigest?: string;
+  };
   readonly packageBytes?: Uint8Array;
   readonly diagnostics: DiagnosticBundle;
 }
@@ -299,15 +320,27 @@ function diagnosticExitCode(diagnostics: DiagnosticBundle): ExitCode {
 
 function validateCommandShape(parsed: ParsedArguments): void {
   const [name, subcommand, ...extra] = parsed.command;
+  const validSubcommand =
+    (name === "scaffold" && subcommand === "view") ||
+    (name === "auth" &&
+      ["login", "logout", "whoami"].includes(subcommand ?? "")) ||
+    (name === "runs" &&
+      ["list", "inspect", "logs"].includes(subcommand ?? ""));
   if (
     extra.length > 0 ||
-    (subcommand && !(name === "scaffold" && subcommand === "view"))
+    (subcommand && !validSubcommand) ||
+    ((name === "auth" || name === "runs") && !subcommand)
   )
     throw new Error("Unexpected positional arguments.");
   const key =
-    name === "scaffold" ? `${name} ${subcommand ?? ""}` : (name ?? "help");
+    name === "scaffold" || name === "auth" || name === "runs"
+      ? `${name} ${subcommand ?? ""}`
+      : (name ?? "help");
   const commandOptions: Readonly<Record<string, readonly string[]>> = {
     help: [],
+    "auth login": [],
+    "auth logout": [],
+    "auth whoami": [],
     init: ["root", "project-key", "name"],
     doctor: [],
     discover: ["root"],
@@ -315,9 +348,47 @@ function validateCommandShape(parsed: ParsedArguments): void {
     test: ["root", "run-id", "fixture"],
     eval: ["root", "run-id", "fixture", "repetitions"],
     replay: ["root", "run-id", "recording"],
-    run: ["root", "run-id", "fixture", "environment"],
+    run: [
+      "root",
+      "run-id",
+      "fixture",
+      "environment",
+      "process-id",
+      "process-version-id",
+      "idempotency-key",
+    ],
     inspect: ["root"],
     diff: ["left", "right"],
+    publish: ["root", "process-id", "version"],
+    promote: [
+      "process-id",
+      "process-version-id",
+      "environment",
+      "idempotency-key",
+    ],
+    rollback: ["process-id", "environment", "idempotency-key"],
+    "runs list": [
+      "environment",
+      "case-id",
+      "revision",
+      "cursor",
+      "limit",
+    ],
+    "runs inspect": [
+      "environment",
+      "case-id",
+      "revision",
+      "execution-id",
+    ],
+    "runs logs": [
+      "environment",
+      "case-id",
+      "revision",
+      "execution-id",
+      "classification",
+      "cursor",
+      "limit",
+    ],
     "scaffold view": ["root"],
     mcp: [],
   };
@@ -641,6 +712,7 @@ async function dispatch(
   parsed: ParsedArguments,
   io: CliIo,
   contracts: AuthoringContracts,
+  remoteDependencies: RemoteDependencies,
 ): Promise<CliResult> {
   const [name, subcommand] = parsed.command;
   if (!name || name === "help") {
@@ -648,8 +720,21 @@ async function dispatch(
       exitCode: 0,
       value: envelope("help", true, {
         summary:
-          "Commands: init doctor discover check test eval replay run inspect diff scaffold view mcp",
+          "Commands: auth login|logout|whoami init doctor discover check test eval replay run publish promote rollback runs list|inspect|logs inspect diff scaffold view mcp",
       }),
+    };
+  }
+  if (name === "auth") {
+    const context = createRemoteCommandContext(io.env, remoteDependencies);
+    const result =
+      subcommand === "login"
+        ? await loginCommand(io, context)
+        : subcommand === "logout"
+          ? await logoutCommand(context)
+          : await whoamiCommand(io, context);
+    return {
+      exitCode: result.exitCode,
+      value: envelope(`auth ${subcommand}`, result.exitCode === 0, result.value ?? {}),
     };
   }
   if (name === "init") {
@@ -678,7 +763,7 @@ async function dispatch(
         node: process.versions.node,
         contracts: contracts.versions,
         nonInteractive: true,
-        network: "disabled",
+        network: "explicit",
       }),
     };
   }
@@ -696,8 +781,148 @@ async function dispatch(
         }
       : { exitCode: 1, value: diagnosticValue(name, result.diagnostics) };
   }
-  if (["check", "test", "eval", "replay", "run"].includes(name))
+  if (["check", "test", "eval", "replay"].includes(name))
     return runHarnessCommand(name, parsed, io, contracts);
+  if (name === "run") {
+    const requestedEnvironment = option(parsed, "environment", "local");
+    if (requestedEnvironment === "local")
+      return runHarnessCommand(name, parsed, io, contracts);
+    const environment = hostedEnvironment(requestedEnvironment);
+    const processId = option(parsed, "process-id");
+    const processVersionId = option(parsed, "process-version-id");
+    if (!processId || !processVersionId)
+      throw new Error(
+        "Hosted run requires --process-id and --process-version-id.",
+      );
+    const fixturePath = option(parsed, "fixture");
+    const fixture = fixturePath
+      ? readJson(
+          projectInput(
+            exactRoot(option(parsed, "root", io.cwd) as string),
+            fixturePath,
+          ),
+        )
+      : undefined;
+    const result = await hostedRunCommand(
+      {
+        processId,
+        processVersionId,
+        environment,
+        ...(fixture === undefined ? {} : { fixture }),
+        ...(option(parsed, "idempotency-key")
+          ? { idempotencyKey: option(parsed, "idempotency-key") as string }
+          : {}),
+      },
+      io,
+      createRemoteCommandContext(io.env, remoteDependencies),
+    );
+    return {
+      exitCode: result.exitCode,
+      value: envelope("run", result.exitCode === 0, result.value ?? {}),
+    };
+  }
+  if (name === "publish") {
+    const processId = option(parsed, "process-id");
+    const version = option(parsed, "version");
+    if (!processId || !version)
+      throw new Error("publish requires --process-id and --version.");
+    const root = exactRoot(option(parsed, "root", io.cwd) as string);
+    const compilation = contracts.compileProcess(root);
+    if (!compilation.ok)
+      return {
+        exitCode: diagnosticExitCode(compilation.diagnostics),
+        value: diagnosticValue(name, compilation.diagnostics),
+      };
+    const result = await publishCommand(
+      { processId, version, compilation },
+      io,
+      createRemoteCommandContext(io.env, remoteDependencies),
+    );
+    return {
+      exitCode: result.exitCode,
+      value: envelope(name, result.exitCode === 0, result.value ?? {}),
+    };
+  }
+  if (name === "promote" || name === "rollback") {
+    const processId = option(parsed, "process-id");
+    if (!processId) throw new Error(`${name} requires --process-id.`);
+    const environment = hostedEnvironment(option(parsed, "environment"));
+    const context = createRemoteCommandContext(io.env, remoteDependencies);
+    const idempotencyKey = option(parsed, "idempotency-key");
+    const result =
+      name === "promote"
+        ? await promoteCommand(
+            {
+              processId,
+              processVersionId:
+                option(parsed, "process-version-id") ??
+                missing("--process-version-id"),
+              environment,
+              ...(idempotencyKey ? { idempotencyKey } : {}),
+            },
+            io,
+            context,
+          )
+        : await rollbackCommand(
+            {
+              processId,
+              environment,
+              ...(idempotencyKey ? { idempotencyKey } : {}),
+            },
+            io,
+            context,
+          );
+    return {
+      exitCode: result.exitCode,
+      value: envelope(name, result.exitCode === 0, result.value ?? {}),
+    };
+  }
+  if (name === "runs") {
+    const operation = subcommand as "list" | "inspect" | "logs";
+    const environment = hostedEnvironment(option(parsed, "environment"));
+    const caseId = option(parsed, "case-id");
+    const revision = positiveInteger(option(parsed, "revision"), "--revision");
+    if (!caseId)
+      throw new Error(`runs ${operation} requires --case-id.`);
+    const classification = option(parsed, "classification");
+    if (
+      classification !== undefined &&
+      classification !== "standard" &&
+      classification !== "sensitive"
+    )
+      throw new Error("--classification must be standard or sensitive.");
+    const limitRaw = option(parsed, "limit");
+    const limit =
+      limitRaw === undefined ? undefined : positiveInteger(limitRaw, "--limit");
+    if (limit !== undefined && limit > (operation === "logs" ? 250 : 100))
+      throw new Error("--limit exceeds the public API maximum.");
+    const result = await runsCommand(
+      operation,
+      {
+        environment,
+        caseId,
+        revision,
+        ...(option(parsed, "execution-id")
+          ? { executionId: option(parsed, "execution-id") as string }
+          : {}),
+        ...(classification ? { classification } : {}),
+        ...(option(parsed, "cursor")
+          ? { cursor: option(parsed, "cursor") as string }
+          : {}),
+        ...(limit === undefined ? {} : { limit }),
+      },
+      io,
+      createRemoteCommandContext(io.env, remoteDependencies),
+    );
+    return {
+      exitCode: result.exitCode,
+      value: envelope(
+        `runs ${operation}`,
+        result.exitCode === 0,
+        result.value ?? {},
+      ),
+    };
+  }
   if (name === "inspect") {
     return inspectValue(
       exactRoot(option(parsed, "root", io.cwd) as string),
@@ -750,6 +975,27 @@ async function dispatch(
     return { exitCode: 0 };
   }
   throw new Error(`Unknown command: ${parsed.command.join(" ")}`);
+}
+
+function hostedEnvironment(
+  value: string | undefined,
+): HostedEnvironment {
+  if (value !== "development" && value !== "production")
+    throw new Error(
+      "A hosted command requires --environment development or production.",
+    );
+  return value;
+}
+
+function positiveInteger(value: string | undefined, name: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1)
+    throw new Error(`${name} must be a positive integer.`);
+  return parsed;
+}
+
+function missing(name: string): never {
+  throw new Error(`promote requires ${name}.`);
 }
 
 const rootSchema = Object.freeze({
@@ -810,7 +1056,6 @@ const mcpToolDefinitions = Object.freeze([
     "schema_inspect",
     "capabilities_inspect",
     "package_build",
-    "package_publish",
   ].map((name) => ({
     name,
     inputSchema: {
@@ -819,6 +1064,25 @@ const mcpToolDefinitions = Object.freeze([
       additionalProperties: false,
     },
   })),
+  {
+    name: "package_publish",
+    inputSchema: {
+      type: "object",
+      required: ["processId", "version"],
+      properties: {
+        root: rootSchema,
+        processId: {
+          type: "string",
+          pattern: "^proc_[0-7][0123456789abcdefghjkmnpqrstvwxyz]{25}$",
+        },
+        version: {
+          type: "string",
+          pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
   {
     name: "execution_logs_query",
     inputSchema: {
@@ -985,12 +1249,6 @@ async function callMcpTool(
     | undefined;
   if (!schema) throw new Error("MCP tool schema is unavailable.");
   const args = validateMcpArguments(params.arguments ?? {}, schema);
-  if (name === "package_publish")
-    return {
-      schemaVersion: MCP_SCHEMA_VERSION,
-      ok: false,
-      unavailable: "PRE-67 hosted boundary",
-    };
   if (name === "execution_artifact_read" || name === "execution_logs_query") {
     const root = exactRoot(typeof args.root === "string" ? args.root : io.cwd);
     const runId = args.runId;
@@ -1030,9 +1288,11 @@ async function callMcpTool(
           ? ["test"]
           : name === "replay_run"
             ? ["replay"]
-            : name === "versions_diff"
-              ? ["diff"]
-              : ["inspect"];
+      : name === "versions_diff"
+        ? ["diff"]
+        : name === "package_publish"
+          ? ["publish"]
+        : ["inspect"];
   const cliArgs = [
     ...command,
     ...(name === "versions_diff" ? [] : ["--root", root]),
@@ -1044,6 +1304,10 @@ async function callMcpTool(
       : []),
     ...(typeof args.left === "string" ? ["--left", args.left] : []),
     ...(typeof args.right === "string" ? ["--right", args.right] : []),
+    ...(typeof args.processId === "string"
+      ? ["--process-id", args.processId]
+      : []),
+    ...(typeof args.version === "string" ? ["--version", args.version] : []),
   ];
   const capture: string[] = [];
   const result = await execute(
@@ -1070,22 +1334,56 @@ export async function execute(
   args: readonly string[],
   io: CliIo,
   providedContracts?: AuthoringContracts,
+  remoteDependencies: RemoteDependencies = {},
 ): Promise<CliResult> {
   try {
     const parsed = parseArguments(args, io.isTty);
     validateCommandShape(parsed);
     const first = parsed.command[0];
+    const isHostedRun =
+      first === "run" &&
+      option(parsed, "environment", "local") !== "local";
+    const remoteOnly =
+      first === "auth" ||
+      first === "promote" ||
+      first === "rollback" ||
+      first === "runs" ||
+      isHostedRun;
     const contracts =
       providedContracts ??
-      (!first || first === "help" || first === "init"
+      (!first || first === "help" || first === "init" || remoteOnly
         ? unusedContracts
         : await dynamicContracts());
-    const result = await dispatch(parsed, io, contracts);
+    const result = await dispatch(
+      parsed,
+      io,
+      contracts,
+      remoteDependencies,
+    );
     if (result.value) output(io, parsed.format, result.value);
     return result;
   } catch (error) {
+    const remote =
+      error instanceof RemoteFailure ? error : undefined;
     const value = envelope(args[0] ?? "help", false, {
       error: error instanceof Error ? error.message : "CLI failed.",
+      ...(remote
+        ? {
+            code: remote.details.code,
+            ...(remote.details.requestId
+              ? { requestId: remote.details.requestId }
+              : {}),
+            ...(remote.details.authorizationUrl
+              ? { authorizationUrl: remote.details.authorizationUrl }
+              : {}),
+            ...(remote.details.ambiguous
+              ? { ambiguous: true }
+              : {}),
+            ...(remote.details.retryAfterSeconds === undefined
+              ? {}
+              : { retryAfterSeconds: remote.details.retryAfterSeconds }),
+          }
+        : {}),
     });
     const format =
       args.includes("--format") &&
@@ -1094,7 +1392,12 @@ export async function execute(
         : "json";
     output(io, format, value);
     return {
-      exitCode: error instanceof CliFailure ? error.exitCode : 2,
+      exitCode:
+        error instanceof CliFailure
+          ? error.exitCode
+          : error instanceof RemoteFailure
+            ? error.exitCode
+            : 2,
       value,
     };
   }
