@@ -23,18 +23,18 @@ preprocess init --root ./fabrication-orders \
 preprocess doctor --format json
 preprocess discover --root ./fabrication-orders --format json
 preprocess check --root ./fabrication-orders --format json
-preprocess test --root ./fabrication-orders --fixture fixtures/basic.json \
-  --run-id fixture-basic --format json
-preprocess eval --root ./fabrication-orders --fixture fixtures/basic.json
-preprocess replay --root ./fabrication-orders --recording recordings/case.json
-preprocess run --root ./fabrication-orders --environment local
 preprocess inspect --root ./fabrication-orders
 preprocess diff --left ./v1 --right ./v2
 preprocess scaffold view --root ./fabrication-orders
 ```
 
-All operations are flag-driven. Local commands stay credential-free and `run`
-continues to default to `local`.
+`check` is static compile/package verification only. Local `test`, `eval`,
+`replay`, and `run --environment local` currently fail closed with
+`PP_EXECUTION_UNSUPPORTED` until a real harness execution port ships. They must
+not be treated as green Process execution.
+
+Hosted `run --environment development|production` remains available for remote
+test runs after authentication. All local commands stay credential-free.
 
 ## Authentication and hosted operations
 
@@ -44,7 +44,8 @@ preprocess auth whoami --format json
 preprocess auth logout
 
 preprocess publish --root ./fabrication-orders \
-  --process-id proc_01k5j9pdq7gh2mnb4cvxyz8t3e --version 1.2.3
+  --process-id proc_01k5j9pdq7gh2mnb4cvxyz8t3e --version 1.2.3 \
+  --test-summary ./test-summary.json
 preprocess run --environment development \
   --process-id proc_01k5j9pdq7gh2mnb4cvxyz8t3e \
   --process-version-id procv_01k5j9pdq7gh2mnb4cvxyz8t3e
@@ -82,6 +83,10 @@ environment. Publication uploads the exact canonical compiler bytes under a
 content-derived idempotency key. It does not promote, bind credentials, or
 widen capabilities.
 
+`publish` requires `--test-summary` JSON with non-vacuous executed evidence
+(`tests > 0`, `passed: true`, empty `failures`). Vacuous
+`{ passed: true, tests: 0 }` summaries are rejected by the CLI and API.
+
 For non-production development and deterministic fake servers,
 `PREPROCESS_API_URL` and `PREPROCESS_AUTH_URL` select the two service origins.
 Non-loopback origins must use HTTPS.
@@ -98,10 +103,12 @@ and progress are reserved for stderr. Exit codes are stable:
 | 4    | remote service failure                            |
 | 5    | incompatible CLI/SDK/platform contract            |
 
-Each check/test/eval/replay/local run writes mode-`0600` canonical artifacts to
+Each successful `check` writes mode-`0600` canonical artifacts to
 `.preprocess/runs/<runId>/bundle.json` and `manifest.json`. Explicit run IDs are
 bounded and cannot contain path separators. Fixture and recording input is
 bounded and structurally rejected when it contains credential-bearing fields.
+Local `test` / `eval` / `replay` / local `run` exit `2` with
+`PP_EXECUTION_UNSUPPORTED` and do not write success artifacts.
 
 ## MCP
 
@@ -112,10 +119,11 @@ exposes:
 - `versions_diff`, `schema_inspect`, `capabilities_inspect`, `package_build`
 - `package_publish`, `execution_logs_query`, `execution_artifact_read`
 
-Local tools call the same CLI contract paths. `package_publish` requires
-`processId` and `version`, compiles the exact package, and calls the same
-idempotent publication boundary as the CLI. Execution artifact/log tools read
-only bounded canonical local run artifacts.
+Local tools call the same CLI contract paths. `tests_run` and `replay_run`
+currently fail closed like the CLI. `package_publish` requires `processId`,
+`version`, and `testSummary` (path to non-vacuous JSON evidence), compiles the
+exact package, and calls the same idempotent publication boundary as the CLI.
+Execution artifact/log tools read only bounded canonical local run artifacts.
 
 ## Development
 

@@ -6,6 +6,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -133,7 +134,7 @@ function processVersion(version = "1.2.3") {
     compilerVersion: "1.0.0",
     formatVersion: "preprocess.package/v1",
     capabilities: { outbound: [] },
-    testSummary: { passed: true, tests: 0, failures: [] },
+    testSummary: { passed: true, tests: 3, failures: [] },
     wfpScriptName: "process-version",
     state: "published",
     publishedAt: timestamp,
@@ -505,6 +506,10 @@ test("request and response TypeIDs reject UUID overflow encodings", async () => 
   };
   const root = mkdtempSync(join(tmpdir(), "preprocess-typeid-contract-"));
   try {
+    writeFileSync(
+      join(root, "test-summary.json"),
+      JSON.stringify({ passed: true, tests: 3, failures: [] }),
+    );
     let requestCalls = 0;
     const badRequest = io(root);
     assert.equal(
@@ -516,6 +521,8 @@ test("request and response TypeIDs reject UUID overflow encodings", async () => 
             overflowProcessId,
             "--version",
             "1.2.3",
+            "--test-summary",
+            "test-summary.json",
           ],
           badRequest.value,
           projectContracts(),
@@ -549,6 +556,8 @@ test("request and response TypeIDs reject UUID overflow encodings", async () => 
         processId,
         "--version",
         "1.2.3",
+        "--test-summary",
+        "test-summary.json",
       ],
       badResponse.value,
       projectContracts(),
@@ -940,6 +949,11 @@ test("publish sends the exact compiler bytes with a stable idempotency key and c
         bytes.toString(),
       );
       assert.deepEqual(parsed.manifest.capabilities, { outbound: [] });
+      assert.deepEqual(parsed.testSummary, {
+        passed: true,
+        tests: 3,
+        failures: [],
+      });
       assert.equal(requests.at(-1).url, `/v1/processes/${processId}/versions`);
       firstKey ??= requests.at(-1).headers["idempotency-key"];
       assert.equal(requests.at(-1).headers["idempotency-key"], firstKey);
@@ -951,6 +965,10 @@ test("publish sends the exact compiler bytes with a stable idempotency key and c
     async ({ url, requests }) => {
       const root = mkdtempSync(join(tmpdir(), "preprocess-publish-"));
       try {
+        writeFileSync(
+          join(root, "test-summary.json"),
+          JSON.stringify({ passed: true, tests: 3, failures: [] }),
+        );
         for (let index = 0; index < 2; index += 1) {
           const streams = io(root);
           const result = await execute(
@@ -960,6 +978,8 @@ test("publish sends the exact compiler bytes with a stable idempotency key and c
               processId,
               "--version",
               "1.2.3",
+              "--test-summary",
+              "test-summary.json",
             ],
             streams.value,
             projectContracts(bytes),
@@ -985,13 +1005,22 @@ test("MCP package_publish uses the same authenticated immutable publication boun
     async ({ url, requests }) => {
       const root = mkdtempSync(join(tmpdir(), "preprocess-mcp-publish-"));
       try {
+        writeFileSync(
+          join(root, "test-summary.json"),
+          JSON.stringify({ passed: true, tests: 3, failures: [] }),
+        );
         async function* input() {
           yield `${JSON.stringify({
             id: 1,
             method: "tools/call",
             params: {
               name: "package_publish",
-              arguments: { root, processId, version: "2.0.0" },
+              arguments: {
+                root,
+                processId,
+                version: "2.0.0",
+                testSummary: "test-summary.json",
+              },
             },
           })}\n`;
         }

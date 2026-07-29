@@ -62,8 +62,23 @@ function run(command, arguments_, options = {}) {
   });
 }
 
-function jsonCommand(command, arguments_, options) {
-  return JSON.parse(run(command, arguments_, options));
+function jsonCommand(command, arguments_, options = {}) {
+  const { allowFailure = false, ...runOptions } = options;
+  try {
+    return JSON.parse(run(command, arguments_, runOptions));
+  } catch (error) {
+    if (
+      allowFailure &&
+      error &&
+      typeof error === "object" &&
+      "stdout" in error &&
+      typeof error.stdout === "string" &&
+      error.stdout.length > 0
+    ) {
+      return JSON.parse(error.stdout);
+    }
+    throw error;
+  }
 }
 
 export function createPackedTarball() {
@@ -224,16 +239,17 @@ export function verifyReleasePackage(tarball) {
     const tested = jsonCommand(
       binary,
       ["test", "--run-id", "release-test", "--format", "json"],
-      { cwd: processRoot, env: environment },
+      { cwd: processRoot, env: environment, allowFailure: true },
     );
-    assert.equal(tested.ok, true);
+    assert.equal(tested.ok, false);
+    assert.equal(tested.code, "PP_EXECUTION_UNSUPPORTED");
 
     return {
       name: packedManifest.name,
       version: packedManifest.version,
       dependencies: packedManifest.dependencies,
       inventory,
-      probes: ["doctor", "init", "discover", "check", "test"],
+      probes: ["doctor", "init", "discover", "check", "test-fail-closed"],
     };
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });

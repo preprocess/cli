@@ -366,7 +366,7 @@ function validateCommandShape(parsed: ParsedArguments): void {
     ],
     inspect: ["root"],
     diff: ["left", "right"],
-    publish: ["root", "process-id", "version"],
+    publish: ["root", "process-id", "version", "test-summary"],
     promote: [
       "process-id",
       "process-version-id",
@@ -572,16 +572,6 @@ async function runHarnessCommand(
 ): Promise<CliResult> {
   if (io.signal?.aborted) throw new Error("Operation cancelled.");
   const root = exactRoot(option(parsed, "root", io.cwd) as string);
-  const mode =
-    name === "check"
-      ? "static"
-      : name === "replay"
-        ? "replay"
-        : name === "run"
-          ? "fixture"
-          : name === "eval"
-            ? "fixture"
-            : "fixture";
   if (name === "run" && option(parsed, "environment", "local") !== "local")
     return {
       exitCode: 2,
@@ -589,23 +579,16 @@ async function runHarnessCommand(
         error: "PRE-66 supports only --environment local.",
       }),
     };
-  const defaultFixture = join(root, "fixtures", "basic.json");
-  const fixturePath = option(
-    parsed,
-    "fixture",
-    ["test", "eval", "run"].includes(name) && existsSync(defaultFixture)
-      ? "fixtures/basic.json"
-      : undefined,
-  );
-  const recordingPath = option(parsed, "recording");
-  const fixture = fixturePath
-    ? readJson(projectInput(root, fixturePath))
-    : undefined;
-  const recording = recordingPath
-    ? readJson(projectInput(root, recordingPath))
-    : undefined;
-  if (name === "replay" && !recording)
-    throw new Error("replay requires --recording.");
+  if (name !== "check") {
+    return {
+      exitCode: 2,
+      value: envelope(name, false, {
+        code: "PP_EXECUTION_UNSUPPORTED",
+        error:
+          "Local Process execution is not available in this CLI release. test, eval, replay, and local run cannot claim success without a real harness execution port.",
+      }),
+    };
+  }
   const runId = stableRunId(name, root, option(parsed, "run-id"));
   const compilation = contracts.compileProcess(root);
   if (!compilation.ok)
@@ -613,90 +596,31 @@ async function runHarnessCommand(
       exitCode: diagnosticExitCode(compilation.diagnostics),
       value: diagnosticValue(name, compilation.diagnostics),
     };
-  const rawRepetitions =
-    name === "eval" ? option(parsed, "repetitions", "1") : "1";
-  const repetitions = Number(rawRepetitions);
-  if (
-    !Number.isSafeInteger(repetitions) ||
-    repetitions < 1 ||
-    repetitions > 100
-  )
-    throw new Error("--repetitions must be an integer from 1 to 100.");
-  const runs: {
-    readonly runId: string;
-    readonly bundle: Readonly<Record<string, unknown>>;
-    readonly assertions: HarnessResult["assertions"];
-    readonly artifacts: Readonly<Record<string, string>>;
-  }[] = [];
-  for (let index = 0; index < repetitions; index += 1) {
-    if (io.signal?.aborted) throw new Error("Operation cancelled.");
-    const currentRunId =
-      repetitions === 1
-        ? runId
-        : `${runId}-${String(index + 1).padStart(3, "0")}`;
-    const result = await contracts.runHarness({
-      root,
-      mode,
-      runId: currentRunId,
-      processVersion: compilation.manifest?.digests?.package ?? "local",
-      ...(fixture ? { fixture } : {}),
-      ...(recording ? { recording } : {}),
-      ...(name === "check" ? {} : { execution: deterministicExecution }),
-    });
-    if (io.signal?.aborted) throw new Error("Operation cancelled.");
-    if (!result.ok)
-      return {
-        exitCode: diagnosticExitCode(result.diagnostics),
-        value: diagnosticValue(name, result.diagnostics),
-      };
-    const bundle = result.bundle ?? {};
-    runs.push({
-      runId: currentRunId,
+  const result = await contracts.runHarness({
+    root,
+    mode: "static",
+    runId,
+    processVersion: compilation.manifest?.digests?.package ?? "local",
+  });
+  if (io.signal?.aborted) throw new Error("Operation cancelled.");
+  if (!result.ok)
+    return {
+      exitCode: diagnosticExitCode(result.diagnostics),
+      value: diagnosticValue(name, result.diagnostics),
+    };
+  const bundle = result.bundle ?? {};
+  const artifacts = writeRun(root, runId, bundle, compilation.manifest);
+  return {
+    exitCode: result.assertions?.passed === false ? 1 : 0,
+    value: envelope(name, result.assertions?.passed !== false, {
+      projectKey: compilation.manifest?.projectKey,
+      runId,
       bundle,
       assertions: result.assertions,
-      artifacts: writeRun(root, currentRunId, bundle, compilation.manifest),
-    });
-  }
-  const ok = runs.every((run) => run.assertions?.passed ?? true);
-  const first = runs[0] as (typeof runs)[number];
-  return {
-    exitCode: ok ? 0 : 1,
-    value: envelope(name, ok, {
-      projectKey: compilation.manifest?.projectKey,
-      runId: first.runId,
-      bundle: first.bundle,
-      assertions: first.assertions,
-      artifacts: first.artifacts,
-      ...(repetitions > 1
-        ? {
-            evaluation: {
-              repetitions,
-              passed: runs.filter((run) => run.assertions?.passed ?? true)
-                .length,
-              runIds: runs.map((run) => run.runId),
-            },
-          }
-        : {}),
+      artifacts,
     }),
   };
 }
-
-const deterministicExecution = Object.freeze({
-  async execute(): Promise<Readonly<Record<string, unknown>>> {
-    return {
-      result: {},
-      success: true,
-      outcome: "succeeded",
-      schemaState: {
-        valid: true,
-        activeBranches: [],
-        fieldStates: {},
-        dynamicDomains: {},
-      },
-      evidenceCoverage: { required: [], covered: [] },
-    };
-  },
-});
 
 function inspectValue(root: string, contracts: AuthoringContracts): CliResult {
   const compilation = contracts.compileProcess(root);
@@ -831,8 +755,13 @@ async function dispatch(
   if (name === "publish") {
     const processId = option(parsed, "process-id");
     const version = option(parsed, "version");
+    const testSummaryPath = option(parsed, "test-summary");
     if (!processId || !version)
       throw new Error("publish requires --process-id and --version.");
+    if (!testSummaryPath)
+      throw new Error(
+        "publish requires --test-summary with non-vacuous executed test evidence.",
+      );
     const root = exactRoot(option(parsed, "root", io.cwd) as string);
     const compilation = contracts.compileProcess(root);
     if (!compilation.ok)
@@ -841,7 +770,12 @@ async function dispatch(
         value: diagnosticValue(name, compilation.diagnostics),
       };
     const result = await publishCommand(
-      { processId, version, compilation },
+      {
+        processId,
+        version,
+        compilation,
+        testSummaryPath: projectInput(root, testSummaryPath),
+      },
       io,
       createRemoteCommandContext(io.env, remoteDependencies),
     );
@@ -1075,7 +1009,7 @@ const mcpToolDefinitions = Object.freeze([
     name: "package_publish",
     inputSchema: {
       type: "object",
-      required: ["processId", "version"],
+      required: ["processId", "version", "testSummary"],
       properties: {
         root: rootSchema,
         processId: {
@@ -1085,6 +1019,11 @@ const mcpToolDefinitions = Object.freeze([
         version: {
           type: "string",
           pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$",
+        },
+        testSummary: {
+          type: "string",
+          minLength: 1,
+          maxLength: 4096,
         },
       },
       additionalProperties: false,
@@ -1315,6 +1254,9 @@ async function callMcpTool(
       ? ["--process-id", args.processId]
       : []),
     ...(typeof args.version === "string" ? ["--version", args.version] : []),
+    ...(typeof args.testSummary === "string"
+      ? ["--test-summary", args.testSummary]
+      : []),
   ];
   const capture: string[] = [];
   const result = await execute(
