@@ -5,7 +5,7 @@ Process authoring and authenticated hosted-operation CLI and MCP server.
 Install the public v1 release with:
 
 ```sh
-npm install --global @preprocess/cli@^1.0.0
+npm install --global @preprocess/cli@^0.0.0
 preprocess doctor --format json
 ```
 

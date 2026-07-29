@@ -33,7 +33,7 @@ import {
 
 export const CLI_SCHEMA_VERSION = "preprocess.cli/v1" as const;
 export const MCP_SCHEMA_VERSION = "preprocess.mcp/v1" as const;
-export const CLI_VERSION = "1.0.0" as const;
+export const CLI_VERSION = "0.0.0" as const;
 
 export type ExitCode = 0 | 1 | 2 | 3 | 4 | 5;
 export type OutputFormat = "pretty" | "json" | "jsonl";
@@ -422,8 +422,8 @@ async function dynamicContracts(): Promise<AuthoringContracts> {
     };
     if (
       versions.project !== "preprocess.project/v1" ||
-      versions.compiler !== "1.0.0" ||
-      versions.harness !== "1.0.0"
+      versions.compiler !== "0.0.0" ||
+      versions.harness !== "0.0.0"
     )
       throw new CliFailure(
         "The shared authoring contracts are incompatible.",
@@ -460,7 +460,7 @@ const unusedContracts: AuthoringContracts = Object.freeze({
 
 function initProject(root: string, projectKey: string, name: string): void {
   const files: Readonly<Record<string, string>> = {
-    "preprocess.config.ts": `import { defineProcess } from "@preprocess/sdk"\n\nexport default defineProcess({\n  projectKey: ${JSON.stringify(projectKey)},\n  name: ${JSON.stringify(name)},\n  sdk: "^1.0.0",\n})\n`,
+    "preprocess.config.ts": `import { defineProcess } from "@preprocess/sdk"\n\nexport default defineProcess({\n  projectKey: ${JSON.stringify(projectKey)},\n  name: ${JSON.stringify(name)},\n  sdk: "^0.0.0",\n})\n`,
     "schema.ts": `export default { fields: [] }\n`,
     "system.md": `You process ${name} accurately and cite the supplied evidence.\n`,
     "package.json": `${JSON.stringify(
@@ -468,7 +468,7 @@ function initProject(root: string, projectKey: string, name: string): void {
         name: projectKey,
         private: true,
         type: "module",
-        dependencies: { "@preprocess/sdk": "^1.0.0" },
+        dependencies: { "@preprocess/sdk": "^0.0.0" },
       },
       null,
       2,

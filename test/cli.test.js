@@ -28,8 +28,8 @@ function contracts(overrides = {}) {
   const value = {
     versions: {
       project: "preprocess.project/v1",
-      compiler: "1.0.0",
-      harness: "1.0.0",
+      compiler: "0.0.0",
+      harness: "0.0.0",
     },
     discoverProcessProject(root) {
       calls.discover += 1;
@@ -39,7 +39,7 @@ function contracts(overrides = {}) {
           root,
           projectKey: "fixture-process",
           name: "Fixture Process",
-          sdk: "^1.0.0",
+          sdk: "^0.0.0",
           files: [],
           provenance: { kind: "local", dirty: false },
         },

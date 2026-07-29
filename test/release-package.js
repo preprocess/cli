@@ -122,17 +122,17 @@ export function verifyReleasePackage(tarball) {
     const packedManifestText = readFileSync(packedManifestPath, "utf8");
     const packedManifest = JSON.parse(packedManifestText);
     const expectedDependencies = {
-      "@preprocess/compiler": "^1.0.0",
-      "@preprocess/diagnostics": "^1.0.0",
-      "@preprocess/harness": "^1.0.0",
-      "@preprocess/project": "^1.0.0",
-      "@preprocess/sdk": "^1.0.0",
+      "@preprocess/compiler": "^0.0.0",
+      "@preprocess/diagnostics": "^0.0.0",
+      "@preprocess/harness": "^0.0.0",
+      "@preprocess/project": "^0.0.0",
+      "@preprocess/sdk": "^0.0.0",
     };
 
     assert.equal(packedManifest.name, "@preprocess/cli");
-    assert.equal(packedManifest.version, "1.0.0");
+    assert.equal(packedManifest.version, "0.0.0");
     assert.equal(packedManifest.license, "UNLICENSED");
-    assert.equal(packedManifest.private, undefined);
+    assert.equal(packedManifest.private, true);
     assert.deepEqual(packedManifest.dependencies, expectedDependencies);
     assert.equal(packedManifest.optionalDependencies, undefined);
     assert.equal(packedManifest.peerDependencies, undefined);
@@ -140,7 +140,7 @@ export function verifyReleasePackage(tarball) {
     assert.equal(packedManifest.scripts?.install, undefined);
     assert.equal(packedManifest.scripts?.postinstall, undefined);
     assert.equal(packedManifest.bin?.preprocess, "./dist/index.js");
-    assert.equal(packedManifest.publishConfig?.access, "public");
+    assert.equal(packedManifest.publishConfig?.access, "restricted");
     assert.equal(packedManifest.publishConfig?.provenance, true);
     assert.equal(
       packedManifest.publishConfig?.registry,
@@ -186,12 +186,12 @@ export function verifyReleasePackage(tarball) {
       },
       {
         schemaVersion: "preprocess.cli/v1",
-        cliVersion: "1.0.0",
+        cliVersion: "0.0.0",
         ok: true,
         contracts: {
           project: "preprocess.project/v1",
-          compiler: "1.0.0",
-          harness: "1.0.0",
+          compiler: "0.0.0",
+          harness: "0.0.0",
         },
       },
     );
