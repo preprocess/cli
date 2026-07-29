@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 import type { CliIo, CliResult, CompilationResult } from "../../index.js";
 import type { RemoteCommandContext } from "../../remote/context.js";
@@ -8,10 +9,17 @@ import { isTypeId } from "../../remote/validate.js";
 
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 
+export interface ProcessTestSummary {
+  readonly passed: boolean;
+  readonly tests: number;
+  readonly failures: readonly string[];
+}
+
 export interface PublishInput {
   readonly processId: string;
   readonly version: string;
   readonly compilation: CompilationResult;
+  readonly testSummaryPath: string;
 }
 
 export async function publishCommand(
@@ -30,6 +38,7 @@ export async function publishCommand(
   validateProcessId(input.processId);
   if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(input.version))
     throw new Error("publish requires a valid semantic --version.");
+  const testSummary = readNonVacuousTestSummary(input.testSummaryPath);
   const packageDigest = compilation.manifest.digests?.package;
   const packageValue = compilation.package as Readonly<Record<string, unknown>>;
   const manifestDigest = packageValue.manifestDigest;
@@ -67,7 +76,7 @@ export async function publishCommand(
       packageBase64: Buffer.from(compilation.packageBytes).toString("base64"),
       packageDigest,
       manifestDigest,
-      testSummary: { passed: true, tests: 0, failures: [] },
+      testSummary,
     },
     signal: io.signal,
     validate: validateProcessVersion,
@@ -89,6 +98,52 @@ export async function publishCommand(
       requestId: response.requestId,
       idempotentReplay: response.idempotentReplay,
     },
+  };
+}
+
+export function readNonVacuousTestSummary(path: string): ProcessTestSummary {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    throw new Error(
+      "publish --test-summary must point to a readable JSON test summary.",
+    );
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    Array.isArray(parsed) ||
+    typeof (parsed as { passed?: unknown }).passed !== "boolean" ||
+    !Number.isSafeInteger((parsed as { tests?: unknown }).tests) ||
+    Number((parsed as { tests: number }).tests) < 0 ||
+    !Array.isArray((parsed as { failures?: unknown }).failures) ||
+    (parsed as { failures: unknown[] }).failures.length > 100 ||
+    (parsed as { failures: unknown[] }).failures.some(
+      (failure) => typeof failure !== "string" || failure.length > 1024,
+    ) ||
+    (parsed as { passed: boolean }).passed !==
+      ((parsed as { failures: unknown[] }).failures.length === 0)
+  ) {
+    throw new Error("The Process test summary is invalid.");
+  }
+  const summary = parsed as {
+    passed: boolean;
+    tests: number;
+    failures: string[];
+  };
+  if (summary.tests === 0) {
+    throw new Error(
+      "A Process version cannot be published without executed tests.",
+    );
+  }
+  if (!summary.passed) {
+    throw new Error("A Process version with failing tests cannot be published.");
+  }
+  return {
+    passed: summary.passed,
+    tests: summary.tests,
+    failures: Object.freeze([...summary.failures]),
   };
 }
 

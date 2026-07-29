@@ -340,34 +340,30 @@ test("local commands delegate to shared contracts and persist predictable artifa
   const root = temporaryProject();
   try {
     const fake = contracts();
-    for (const command of ["discover", "check", "test", "eval", "inspect"]) {
+    for (const command of ["discover", "check", "inspect"]) {
       const streams = io(root);
       const args = [command, "--root", root, "--format", "json"];
-      if (["check", "test", "eval"].includes(command))
-        args.push("--run-id", `${command}-run`);
+      if (command === "check") args.push("--run-id", `${command}-run`);
       const result = await execute(args, streams.value, fake.value);
       assert.equal(result.exitCode, 0, command);
       assert.equal(JSON.parse(streams.stdout.join("")).command, command);
     }
     assert.equal(fake.calls.discover, 1);
-    assert.equal(fake.calls.harness.length, 3);
-    for (const command of ["check", "test", "eval"]) {
-      assert.equal(
-        JSON.parse(
-          readFileSync(
-            join(root, ".preprocess", "runs", `${command}-run`, "bundle.json"),
-            "utf8",
-          ),
-        ).runId,
-        `${command}-run`,
-      );
-      assert.equal(
-        statSync(
-          join(root, ".preprocess", "runs", `${command}-run`, "bundle.json"),
-        ).mode & 0o777,
-        0o600,
-      );
-    }
+    assert.equal(fake.calls.harness.length, 1);
+    assert.equal(
+      JSON.parse(
+        readFileSync(
+          join(root, ".preprocess", "runs", "check-run", "bundle.json"),
+          "utf8",
+        ),
+      ).runId,
+      "check-run",
+    );
+    assert.equal(
+      statSync(join(root, ".preprocess", "runs", "check-run", "bundle.json"))
+        .mode & 0o777,
+      0o600,
+    );
     const replay = io(root);
     assert.equal(
       (
@@ -409,7 +405,50 @@ test("local commands delegate to shared contracts and persist predictable artifa
   }
 });
 
-test("run is local-only and replay requires a credential-free recording", async () => {
+test("test eval replay and local run fail closed without a real execution port", async () => {
+  const root = temporaryProject();
+  try {
+    const fake = contracts();
+    for (const command of ["test", "eval", "run"]) {
+      const streams = io(root);
+      const result = await execute(
+        [command, "--root", root, "--format", "json"],
+        streams.value,
+        fake.value,
+      );
+      assert.equal(result.exitCode, 2, command);
+      assert.equal(
+        JSON.parse(streams.stdout.join("")).code,
+        "PP_EXECUTION_UNSUPPORTED",
+      );
+    }
+    assert.equal(fake.calls.harness.length, 0);
+    writeFileSync(
+      join(root, "recording.json"),
+      JSON.stringify({ authorized: true }),
+    );
+    const replay = io(root);
+    assert.equal(
+      (
+        await execute(
+          ["replay", "--recording", "recording.json", "--run-id", "replay-run"],
+          replay.value,
+          fake.value,
+        )
+      ).exitCode,
+      2,
+    );
+    assert.equal(
+      JSON.parse(replay.stdout.join("")).code,
+      "PP_EXECUTION_UNSUPPORTED",
+    );
+    assert.equal(fake.calls.harness.length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("run hosted environment is rejected before local execution gating", async () => {
   const root = temporaryProject();
   try {
     const fake = contracts();
@@ -425,46 +464,14 @@ test("run is local-only and replay requires a credential-free recording", async 
       2,
     );
     assert.equal(fake.calls.harness.length, 0);
-
-    writeFileSync(
-      join(root, "recording.json"),
-      JSON.stringify({ authorized: true }),
-    );
-    const replay = io(root);
-    assert.equal(
-      (
-        await execute(
-          ["replay", "--recording", "recording.json", "--run-id", "replay-run"],
-          replay.value,
-          fake.value,
-        )
-      ).exitCode,
-      0,
-    );
-    assert.equal(fake.calls.harness.at(-1).mode, "replay");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("eval performs bounded repeated runs and cancellation reaches no harness", async () => {
+test("cancellation reaches no harness for unsupported local execution", async () => {
   const root = temporaryProject();
   try {
-    const repeated = contracts();
-    const streams = io(root);
-    const result = await execute(
-      ["eval", "--repetitions", "3", "--run-id", "quality"],
-      streams.value,
-      repeated.value,
-    );
-    assert.equal(result.exitCode, 0);
-    assert.deepEqual(JSON.parse(streams.stdout.join("")).evaluation.runIds, [
-      "quality-001",
-      "quality-002",
-      "quality-003",
-    ]);
-    assert.equal(repeated.calls.harness.length, 3);
-
     const cancelled = contracts();
     const controller = new AbortController();
     controller.abort();
